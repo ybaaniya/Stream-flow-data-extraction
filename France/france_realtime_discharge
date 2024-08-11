@@ -1,0 +1,96 @@
+import requests
+import pandas as pd
+import json
+import os
+import time
+from datetime import datetime
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+from multiprocessing import Pool, cpu_count
+
+# Load the DataFrame
+df = pd.read_csv('path/to/csvfile/containing/station')
+
+# Base URL
+base_url = "https://hydro.eaufrance.fr/stationhydro/ajax/{code_station}/series?hydro_series[startAt]={start_date}&hydro_series[endAt]={end_date}&hydro_series[variableType]=simple_and_interpolated_and_hourly_variable&hydro_series[simpleAndInterpolatedAndHourlyVariable]=Q&hydro_series[statusData]=raw"
+
+# Directory to save CSV files
+output_dir = 'path/to/folder/to/save/data'
+os.makedirs(output_dir, exist_ok=True)
+
+
+# Retry strategy
+retry_strategy = Retry(
+    total=3,
+    backoff_factor=1,
+    status_forcelist=[429, 500, 502, 503, 504],
+    allowed_methods=["HEAD", "GET", "OPTIONS"]
+)
+adapter = HTTPAdapter(max_retries=retry_strategy)
+http = requests.Session()
+http.mount("https://", adapter)
+
+def get_monthly_data(code_station, end_year, end_month):
+    current_date = datetime(end_year, end_month, 1)
+    start_date_limit = datetime(2000, 1, 1)   # earliest year of data you want
+    
+    station_dir = os.path.join(output_dir, code_station)
+    has_data = False
+
+    while current_date >= start_date_limit:
+        start_date_str = current_date.strftime("%d/%m/%Y")
+        next_month = current_date + pd.DateOffset(months=1)
+        end_date_str = (next_month - pd.DateOffset(days=1)).strftime("%d/%m/%Y")
+        
+        url = base_url.format(code_station=code_station, start_date=start_date_str, end_date=end_date_str)
+        
+        try:
+            response = http.get(url, timeout=60)
+            response.raise_for_status()
+            if response.text.strip():
+                data = response.json()
+                if data and 'series' in data and 'data' in data['series'] and data['series']['data']:
+                    print(f"The station '{code_station}' has a non-empty JSON response for {start_date_str} to {end_date_str}.")
+                    
+                    if not has_data:
+                        os.makedirs(station_dir, exist_ok=True)
+                        has_data = True
+                    
+                    obs_df = pd.DataFrame(data['series']['data'])
+                    
+                    csv_file_path = os.path.join(station_dir, f"{code_station}_{start_date_str.replace('/', '-')}_to_{end_date_str.replace('/', '-')}.csv")
+                    
+                    obs_df.to_csv(csv_file_path, index=False)
+                    
+                    print(f"Data saved for station '{code_station}' for {start_date_str} to {end_date_str} to '{csv_file_path}'")
+                else:
+                    print(f"The station '{code_station}' has an empty JSON response for {start_date_str} to {end_date_str}. Stopping further requests for this station.")
+                    break
+            else:
+                print(f"The station '{code_station}' returned an empty response for {start_date_str} to {end_date_str}. Stopping further requests for this station.")
+                break
+        except requests.exceptions.RequestException as e:
+            print(f"Failed to retrieve data for station '{code_station}' for {start_date_str} to {end_date_str}. Error: {e}.")
+            break
+        except json.JSONDecodeError:
+            print(f"Failed to parse JSON for station '{code_station}' for {start_date_str} to {end_date_str}.")
+            break
+        
+        # Wait for 1-2 seconds before the next request
+        time.sleep(1.5)
+        
+        # Move to the previous month
+        current_date = current_date - pd.DateOffset(months=1)
+
+def process_stations(df):
+    for index, row in df.iterrows():
+        code_station = row['code_station'].strip() if row['code_station'] else None
+        if code_station:
+            start_year = 2024  # lastest year you want a data
+            start_month = 5  #latest month of daya you want
+            get_monthly_data(code_station, start_year, start_month)
+    
+    print(f"\nTotal stations processed: {len(df)}")
+
+if __name__ == '__main__':
+    process_stations(df)
