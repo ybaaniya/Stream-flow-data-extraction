@@ -1,0 +1,82 @@
+import os
+import pandas as pd
+import requests
+import time 
+# Load the CSV file
+file_path = 'path to the csv file that contains the stationGuid and wiskiID'
+data = pd.read_csv(file_path)
+
+# Define directories for flow-m and flow-i
+flow_l_dir = 'folder path to save the flow level data'
+
+# Create directories if they don't exist
+os.makedirs(flow_l_dir, exist_ok=True)
+data = data.dropna(subset=['stationGuid'])
+
+# Function to download a file and handle exceptions
+def download_file(url, timeout):
+    try:
+        response = requests.get(url, timeout=timeout)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"Failed to download {url}: {e}")
+        return None
+
+# Function to process JSON data, average values by date, and save as CSV
+def process_json_and_save(data, save_path):
+    # Extract the relevant information
+    records = [
+        {"date": item.get("date"), "value": item.get("value")}
+        for item in data.get("items", [])
+    ]
+    
+    # Check if records are empty
+    if not records:
+        print(f"No data found for {save_path}. Skipping.")
+        return
+    
+    # Check if 'date' and 'value' keys exist
+    if 'date' not in records[0] or 'value' not in records[0]:
+        print(f"No 'date' or 'value' found in the JSON data for {save_path}. Skipping.")
+        return
+    
+    # Create a DataFrame from the records
+    df = pd.DataFrame(records)
+    
+    # Debug: Print the first few rows of the DataFrame to check structure
+    print(f"DataFrame head for {save_path}:")
+    print(df.head())
+
+    # Group by 'date' and calculate the average 'value'
+    df_avg = df.groupby('date')['value'].mean().reset_index()
+    
+    # Save the result as a CSV
+    df_avg.to_csv(save_path, index=False)
+    print(f"Saved averaged data to: {save_path}")
+
+# Loop through each row in the dataframe
+for index, row in data.iterrows():
+    station_guid = row['stationGuid']
+    wiski_id = row['wiskiID']
+    
+    # URL for the JSON data (flow level)
+    flow_l_url = f"https://environment.data.gov.uk/hydrology/id/measures/{station_guid}-level-i-900-m-qualified/readings.json?mineq-date=1940-01-01&max-date=2024-08-24&_limit=20000000"
+    
+    # Save path for the CSV file
+    flow_l_save_path = os.path.join(flow_l_dir, f'{wiski_id}.csv')
+    
+    print(f"Processing station {wiski_id}...")
+    
+    # Download the JSON data
+    json_data = download_file(flow_l_url, timeout=300)
+    
+    if json_data and "items" in json_data and json_data["items"]:
+        # Process the JSON data and save it as a CSV
+        process_json_and_save(json_data, flow_l_save_path)
+    else:
+        print(f"No data available for station {wiski_id}. Skipping to next.")
+
+    time.sleep(5)
+
+print("Download and processing completed.")
