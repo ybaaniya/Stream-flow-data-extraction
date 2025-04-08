@@ -9,7 +9,7 @@ df = pd.read_csv('path/of/station/csv/provided/in/content/of/hydroshare')
 base_url = "https://hubeau.eaufrance.fr/api/v1/hydrometrie/obs_elab?grandeur_hydro_elab=QmJ&fields=date_obs_elab,resultat_obs_elab&cursor=&size=20000&code_entite="
 
 # Directory to save CSV files
-output_dir = 'path/to/directory/to/save/csv'
+output_dir = 'path/to/save/csv'
 os.makedirs(output_dir, exist_ok=True)
 
 for index, row in df.iterrows():
